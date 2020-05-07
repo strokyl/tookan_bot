@@ -1,6 +1,5 @@
 package main
 
-
 import (
 	"strconv"
 	"os"
@@ -9,27 +8,6 @@ import (
 	"strings"
 	"regexp"
 )
-
-var client *restclient.TookanClient
-var teamId int
-
-func init() {
-	token := os.Getenv("TOOKAN_V2_TOKEN")
-	if token == "" {
-		panic("Please set TOOKAN_V2_TOKEN")
-	}
-	teamIdStr := os.Getenv("TOOKAN_TEAM_ID")
-	if teamIdStr == "" {
-		panic("Please set TOOKAN_TEAM_ID")
-	}
-	var err error
-	teamId, err = strconv.Atoi(teamIdStr)
-	if err != nil {
-		panic("Please set a TOOKAN_TEAM_ID that is an integer")
-	}
-
-	client = restclient.New(token)
-}
 
 func removeComma(s string) string {
 	return strings.ReplaceAll(s, ",", " ")
@@ -46,6 +24,8 @@ func extractRepasNum(task restclient.Task) string {
 }
 
 func main() {
+	client := restclient.FromEnv()
+	teamId := restclient.TeamIdFromEnv()
 	tasks := client.GetCompletedTasks(teamId)
 
 	writer := csv.NewWriter(os.Stdout)

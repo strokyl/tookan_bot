@@ -7,25 +7,55 @@ import (
 	"os"
 	"time"
 	"strings"
+	"strconv"
 )
 
 type TookanClient struct {
 	token string
+	debug bool
 }
 
-func New(token string) *TookanClient {
+func New(token string, debug bool) *TookanClient {
 	if token == "" {
 		panic("Tookan client token can't be empty")
 	}
 
 	return &TookanClient{
 		token: token,
+		debug: debug,
 	}
+}
+
+func FromEnv() *TookanClient {
+	token := os.Getenv("TOOKAN_V2_TOKEN")
+	if token == "" {
+		panic("Please set TOOKAN_V2_TOKEN")
+	}
+
+	debug := os.Getenv("DEBUG") == "true"
+	return New(token, debug)
+}
+
+func TeamIdFromEnv() int {
+	teamIdStr := os.Getenv("TOOKAN_TEAM_ID")
+	if teamIdStr == "" {
+		panic("Please set TOOKAN_TEAM_ID")
+	}
+	var err error
+	teamId, err := strconv.Atoi(teamIdStr)
+	if err != nil {
+		panic("Please set a TOOKAN_TEAM_ID that is an integer")
+	}
+	return teamId
 }
 
 func (tookanClient *TookanClient) getTasks(teamId int, taskStatus *int, startDate *time.Time) []Task {
 	const pickup_type = 0
-	client := resty.New()
+	if teamId == 0 {
+		panic("Tookan client teamId can't be 0")
+	}
+
+	client := resty.New().SetDebug(tookanClient.debug)
 
 	payload := map[string]interface{}{
 		"api_key": tookanClient.token,
@@ -102,71 +132,57 @@ func (tookanClient *TookanClient) GetCompletedTasks(teamId int) []Task {
 	return filtered
 }
 
-func (tookanClient *TookanClient) GetUnasignedTask(teamId int) []Task {
-	const unasigned_status = 6
-	const pickup_type = 0
+const unasigned_status = 6
 
-	if teamId == 0 {
-		panic("Tookan client teamId can't be 0")
-	}
+func (tookanClient *TookanClient) GetUnasignedTasks(teamId int) []Task {
+	unasignedStatus := unasigned_status
 
 	ignoreDateBefore := time.Now().Add(-3*24*time.Hour)
 
+	return tookanClient.getTasks(teamId, &unasignedStatus, &ignoreDateBefore)
+}
+
+func (tookanClient *TookanClient) GetCancelledTasks(teamId int) []Task {
+	cancelledStatus := 9
+
+	ignoreDateBefore := time.Now().Add(-3*24*time.Hour)
+
+	return tookanClient.getTasks(teamId, &cancelledStatus, &ignoreDateBefore)
+}
+
+func (tookanClient *TookanClient) MarkATaskUnasigned(id JobId) error {
 	client := resty.New()
 
 	resp, err := client.R().
 		SetHeader("Accept", "application/json").
 		SetBody(map[string]interface{}{
 			"api_key": tookanClient.token,
-			"job_type": pickup_type,
+			"job_id": id,
 			"job_status": unasigned_status,
-			"team_id": teamId,
 		}).
-		Post("https://api.tookanapp.com/v2/get_all_tasks")
+		Post("https://api.tookanapp.com/v2/update_task_status")
 
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("Could not make rest call for markin task %d unasigned: %v", id, err)
 	}
 
 	if resp.IsError() {
-		panic(fmt.Sprintf("Http error %s: %s", resp.Status(), resp.String()))
+		return fmt.Errorf("Http error when marking task %d unasigned %s: %s", id, resp.Status(), resp.String())
 	}
 
-	result := responseTasks{}
+	result := response{}
 	err = json.Unmarshal(resp.Body(), &result)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("Could not serialize json %+v\n", err)
 	}
 
 	if result.Status != 200 {
-		panic(fmt.Sprintf("Could not fetch unasigned tasks: %+v\n", result))
+		return fmt.Errorf(fmt.Sprintf("Could not mark task %d unasigned: %+v\n", id, result))
 	}
-
-	if result.Data == nil {
-		panic("Result has no data field: " + resp.String())
-	}
-
-	filtered := make([]Task, 0)
-	for _, task := range *result.Data {
-		if task.JobId == nil {
-			panic("One of task has no JobId..." + resp.String())
-		}
-		date, err := time.Parse("2006-01-02 15:04:05", task.CreationDate)
-		if err != nil {
-			panic(err)
-		}
-		if (date.After(ignoreDateBefore)) {
-			filtered = append(filtered, task)
-		} else {
-			fmt.Println("Task ignored because it's too old: %+v\n", task)
-		}
-	}
-
-	return filtered
+	return nil
 }
 
-
-func (tookanClient *TookanClient) AutoAssignATask(id JobId) bool {
+func (tookanClient *TookanClient) AutoAssignATask(id JobId) error {
 	client := resty.New()
 
 	resp, err := client.R().
@@ -178,33 +194,43 @@ func (tookanClient *TookanClient) AutoAssignATask(id JobId) bool {
 		Post("https://api.tookanapp.com/v2/re_autoassign_task")
 
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("Could not make rest call for autoassign task %d: %v", id, err)
 	}
 
 	if resp.IsError() {
-		panic(fmt.Sprintf("Http error %s: %s", resp.Status(), resp.String()))
+		return fmt.Errorf("Http error when autoassign task %d %s: %s", id, resp.Status(), resp.String())
 	}
 
 	result := response{}
 	err = json.Unmarshal(resp.Body(), &result)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("Could not serialize json %+v\n", err)
 	}
 
 	if result.Status != 200 {
-		fmt.Fprintln(os.Stderr, fmt.Sprintf("Could not auto affect task %d: %+v\n", id, result))
-		return false
+		return fmt.Errorf(fmt.Sprintf("Could not auto affect task %d: %+v\n", id, result))
 	}
-	return true
+	return nil
 }
 
 func (tookanClient *TookanClient) AutoAssignTasks(tasks []Task) (success []Task, failure []Task) {
+	return actionOnTasks(tookanClient.AutoAssignATask, tasks)
+}
+
+func (tookanClient *TookanClient) MarkTasksUnasigned(tasks []Task) (success []Task, failure []Task) {
+	return actionOnTasks(tookanClient.MarkATaskUnasigned, tasks)
+}
+
+func actionOnTasks(action func(JobId) error, tasks []Task) (success []Task, failure []Task) {
 	success = make([]Task, 0)
 	failure = make([]Task, 0)
+	var err error
 	for _, task := range tasks {
-		if tookanClient.AutoAssignATask(*task.JobId) {
+		err = action(*task.JobId)
+		if err == nil {
 			success = append(success, task)
 		} else {
+			fmt.Fprintf(os.Stderr, "%v", err)
 			failure = append(failure, task)
 		}
 	}
