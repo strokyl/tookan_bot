@@ -1,4 +1,5 @@
 .env
+.prod_env
 # Binaries for programs and plugins
 *.exe
 *.exe~

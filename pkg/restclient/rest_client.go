@@ -49,13 +49,17 @@ func TeamIdFromEnv() int {
 	return teamId
 }
 
+func (tookanClient *TookanClient) getClient() *resty.Client {
+	return resty.New().SetDebug(tookanClient.debug)
+}
+
 func (tookanClient *TookanClient) getTasks(teamId int, taskStatus *int, startDate *time.Time) []Task {
 	const pickup_type = 0
 	if teamId == 0 {
 		panic("Tookan client teamId can't be 0")
 	}
 
-	client := resty.New().SetDebug(tookanClient.debug)
+	client := tookanClient.getClient()
 
 	payload := map[string]interface{}{
 		"api_key": tookanClient.token,
@@ -133,6 +137,7 @@ func (tookanClient *TookanClient) GetCompletedTasks(teamId int) []Task {
 }
 
 const unasigned_status = 6
+const failed_status = 3
 
 func (tookanClient *TookanClient) GetUnasignedTasks(teamId int) []Task {
 	unasignedStatus := unasigned_status
@@ -150,8 +155,61 @@ func (tookanClient *TookanClient) GetCancelledTasks(teamId int) []Task {
 	return tookanClient.getTasks(teamId, &cancelledStatus, &ignoreDateBefore)
 }
 
+func (tookanClient *TookanClient) GetTask(jobId JobId) (*Task, error) {
+	client := tookanClient.getClient()
+
+	resp, err := client.R().
+		SetHeader("Accept", "application/json").
+		SetBody(map[string]interface{}{
+			"api_key": tookanClient.token,
+			"job_ids": []JobId{jobId},
+		}).
+		Post("https://api.tookanapp.com/v2/get_job_details")
+
+	if err != nil {
+		return nil, fmt.Errorf("Could not make rest call to get task detail of %d: %v", int(jobId), err)
+	}
+
+	if resp.IsError() {
+		return nil, fmt.Errorf("Http error when fetching taks detail of %d: %d, %s", int(jobId), resp.Status(), resp.String())
+	}
+
+	//if no task we got an answer with {} instead of []
+	//yes tookan rest API is a rest API only by name
+	//because we also get a 200 with a message saying 404...
+	message := response{}
+	err = json.Unmarshal(resp.Body(), &message)
+	if err != nil {
+		panic(err)
+	}
+
+	if message.Status == 404 {
+		return nil, nil
+	}
+
+	result := responseTasks{}
+	err = json.Unmarshal(resp.Body(), &result)
+	if err != nil {
+		return nil, fmt.Errorf("Could not serialize json %+v\n", err)
+	}
+
+	if result.Status != 200 {
+		return nil, fmt.Errorf(fmt.Sprintf("Could not get task %d details: %+v\n", int(jobId), result))
+	}
+	if result.Data == nil {
+		return nil, fmt.Errorf("Result has no data field: " + resp.String())
+	}
+	if result.Data == nil {
+		return nil, fmt.Errorf("Result has no data field: " + resp.String())
+	}
+	if len(*result.Data) == 0 {
+		return nil, nil
+	}
+	return &((*result.Data)[0]), nil
+}
+
 func (tookanClient *TookanClient) MarkATaskUnasigned(id JobId) error {
-	client := resty.New()
+	client := tookanClient.getClient()
 
 	resp, err := client.R().
 		SetHeader("Accept", "application/json").
@@ -182,8 +240,41 @@ func (tookanClient *TookanClient) MarkATaskUnasigned(id JobId) error {
 	return nil
 }
 
+func (tookanClient *TookanClient) MarkTaskFailed(id JobId, reason string) error {
+	client := tookanClient.getClient()
+
+	resp, err := client.R().
+		SetHeader("Accept", "application/json").
+		SetBody(map[string]interface{}{
+			"api_key": tookanClient.token,
+			"job_id": id,
+			"job_status": failed_status,
+			"reason": reason,
+		}).
+		Post("https://api.tookanapp.com/v2/update_task_status")
+
+	if err != nil {
+		return fmt.Errorf("Could not make rest call for markin task %d failed: %v", id, err)
+	}
+
+	if resp.IsError() {
+		return fmt.Errorf("Http error when marking task %d failed %s: %s", id, resp.Status(), resp.String())
+	}
+
+	result := response{}
+	err = json.Unmarshal(resp.Body(), &result)
+	if err != nil {
+		return fmt.Errorf("Could not serialize json %+v\n", err)
+	}
+
+	if result.Status != 200 {
+		return fmt.Errorf(fmt.Sprintf("Could not mark task %d failed: %+v\n", id, result))
+	}
+	return nil
+}
+
 func (tookanClient *TookanClient) AutoAssignATask(id JobId) error {
-	client := resty.New()
+	client := tookanClient.getClient()
 
 	resp, err := client.R().
 		SetHeader("Accept", "application/json").
@@ -209,6 +300,38 @@ func (tookanClient *TookanClient) AutoAssignATask(id JobId) error {
 
 	if result.Status != 200 {
 		return fmt.Errorf(fmt.Sprintf("Could not auto affect task %d: %+v\n", id, result))
+	}
+	return nil
+}
+
+func (tookanClient *TookanClient) RenameTask(id JobId, newName string) error {
+	client := tookanClient.getClient()
+
+	resp, err := client.R().
+		SetHeader("Accept", "application/json").
+		SetBody(map[string]interface{}{
+			"api_key": tookanClient.token,
+			"job_id": id,
+			"job_pickup_name": newName,
+		}).
+		Post("https://api.tookanapp.com/v2/edit_task")
+
+	if err != nil {
+		return fmt.Errorf("Could not make rest call for renaming task %d: %v", id, err)
+	}
+
+	if resp.IsError() {
+		return fmt.Errorf("Http error when renaming task %d %s: %s", id, resp.Status(), resp.String())
+	}
+
+	result := response{}
+	err = json.Unmarshal(resp.Body(), &result)
+	if err != nil {
+		return fmt.Errorf("Could not serialize json %+v\n", err)
+	}
+
+	if result.Status != 200 {
+		return fmt.Errorf(fmt.Sprintf("Could not rename task %d: %+v\n", id, result))
 	}
 	return nil
 }
@@ -252,6 +375,8 @@ type response struct {
 type JobId int
 
 type Task struct {
+	Phone string `json:"job_pickup_phone"`
+	Email string `json:"customer_email"`
 	JobId *JobId `json:"job_id"`
 	Name string `json:"job_pickup_name"`
 	Description string `json:"job_description"`

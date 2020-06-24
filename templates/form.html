@@ -1,0 +1,35 @@
+<html lang="fr">
+    <head>
+        <meta charset="utf-8">
+
+        <title>#PourEux changer votre creéneai</title>
+        <meta name="description" content="Cette page permet de changer votre horaire">
+        <meta name="author" content="#PourEux">
+
+
+    </head>
+
+    <body>
+        <h1>
+            Replanifier votre panier
+        </h1>
+
+        <p>
+            Chèr.e citoyen.ne du Mouv, pas de panique ton panier n’est pas perdu. Tu peux changer le créneau de collecte et donner encore plus de chance de déposer toute cette générosité à nos poto.e.s de la rue. Pour se faire, tu choisis un créneau pour aujourd’hui si tu es dispo plus tard ou un créneau pour demain.
+        </p>
+
+        <p>
+            <ul>
+                {{range .Plans}}
+                <li>
+                    <a href="{{.Link}}">{{.Text}}</a>
+                </li>
+                {{end}}
+                <li>
+                    <a href="{{.CancelLink}}">Annuler votre panier</a>
+                </li>
+            </ul>
+        </p>
+    </body>
+
+</html>
